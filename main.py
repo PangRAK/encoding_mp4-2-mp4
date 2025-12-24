@@ -4,26 +4,47 @@ import subprocess
 from pathlib import Path
 from typing import Iterable
 
+VIDEO_EXTENSIONS = (
+    ".mp4",
+    ".mov",
+    ".m4v",
+    ".mkv",
+    ".avi",
+    ".webm",
+    ".mpg",
+    ".mpeg",
+    ".ts",
+    ".mts",
+    ".m2ts",
+    ".wmv",
+    ".flv",
+    ".3gp",
+)
 
-def iter_mp4_files(folder: Path, recursive: bool) -> list[Path]:
-    pattern = "**/*.mp4" if recursive else "*.mp4"
-    files = list(folder.glob(pattern))
-    files += list(folder.glob(("**/*.MP4" if recursive else "*.MP4")))
-    return sorted({f.resolve() for f in files if f.is_file()})
+
+def iter_video_files(folder: Path, recursive: bool, extensions: Iterable[str]) -> list[Path]:
+    pattern = "**/*" if recursive else "*"
+    allowed = {ext.lower() for ext in extensions}
+    files = [
+        f.resolve()
+        for f in folder.glob(pattern)
+        if f.is_file() and f.suffix.lower() in allowed
+    ]
+    return sorted(set(files))
 
 
-def transcode_to_temp(input_mp4: Path) -> Path:
+def transcode_to_temp(input_video: Path) -> Path:
     """
-    input_mp4와 같은 폴더에 임시 파일 생성 후 (1)과 유사 세팅으로 H.264 재인코딩.
+    input_video와 같은 폴더에 임시 파일 생성 후 (1)과 유사 세팅으로 H.264 재인코딩.
     """
-    tmp_out = input_mp4.with_suffix(input_mp4.suffix + ".tmp_transcode.mp4")
+    tmp_out = input_video.with_suffix(input_video.suffix + ".tmp_transcode.mp4")
     if tmp_out.exists():
         tmp_out.unlink()
 
     cmd = [
         "ffmpeg",
         "-y",
-        "-i", str(input_mp4),
+        "-i", str(input_video),
 
         "-c:v", "libx264",
         "-profile:v", "high",
@@ -51,8 +72,14 @@ def safe_cleanup(path: Path) -> None:
         pass
 
 
-def replace_in_place(original: Path, tmp_out: Path) -> None:
-    os.replace(str(tmp_out), str(original))
+def output_path_for_in_place(original: Path) -> Path:
+    if original.suffix.lower() == ".mp4":
+        return original
+    return original.with_suffix(".mp4")
+
+
+def replace_in_place(tmp_out: Path, target: Path) -> None:
+    os.replace(str(tmp_out), str(target))
 
 
 def keep_original_and_write_new(original: Path, tmp_out: Path, suffix: str = "_reencoded") -> Path:
@@ -83,9 +110,9 @@ def reencode_folder(
     if not folder.exists() or not folder.is_dir():
         raise ValueError(f"유효한 폴더가 아닙니다: {folder}")
 
-    mp4_files = iter_mp4_files(folder, recursive)
-    if not mp4_files:
-        print("처리할 mp4 파일이 없습니다.")
+    video_files = iter_video_files(folder, recursive, VIDEO_EXTENSIONS)
+    if not video_files:
+        print("처리할 영상 파일이 없습니다.")
         return
 
     print(f"대상 폴더: {folder}")
@@ -93,14 +120,14 @@ def reencode_folder(
     print(f"모드: {'원본 교체(in-place)' if in_place else '원본 유지 + 새 파일 생성'}")
     if not in_place:
         print(f"새 파일 suffix: {suffix}")
-    print(f"대상 파일 수: {len(mp4_files)}")
+    print(f"대상 파일 수: {len(video_files)}")
     if dry_run:
         print("DRY RUN: 실제 인코딩/쓰기 작업은 수행하지 않습니다.\n")
 
     success, failed = 0, 0
 
-    for i, f in enumerate(mp4_files, 1):
-        print(f"[{i}/{len(mp4_files)}] 처리: {f}")
+    for i, f in enumerate(video_files, 1):
+        print(f"[{i}/{len(video_files)}] 처리: {f}")
         tmp_candidate = f.with_suffix(f.suffix + ".tmp_transcode.mp4")
         try:
             if dry_run:
@@ -114,8 +141,15 @@ def reencode_folder(
                 raise RuntimeError("임시 출력 파일이 생성되지 않았거나 크기가 0입니다.")
 
             if in_place:
-                replace_in_place(f, tmp_out)
-                print("  - 완료: 원본을 재인코딩 결과로 교체했습니다.")
+                target_path = output_path_for_in_place(f)
+                if target_path != f and target_path.exists():
+                    raise RuntimeError(f"대상 출력 파일이 이미 존재합니다: {target_path}")
+                replace_in_place(tmp_out, target_path)
+                if target_path != f:
+                    safe_cleanup(f)
+                    print(f"  - 완료: 원본을 재인코딩 후 MP4로 교체했습니다 -> {target_path}")
+                else:
+                    print("  - 완료: 원본을 재인코딩 결과로 교체했습니다.")
             else:
                 new_path = keep_original_and_write_new(f, tmp_out, suffix=suffix)
                 print(f"  - 완료: 원본 유지, 새 파일 생성 -> {new_path}")
@@ -137,7 +171,7 @@ def reencode_folder(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="폴더 내 MP4를 (1)과 유사 세팅으로 H.264 재인코딩합니다. 기본은 원본 교체입니다."
+        description="폴더 내 영상 파일을 (1)과 유사 세팅으로 MP4(H.264)로 재인코딩합니다. 기본은 원본 교체입니다."
     )
     parser.add_argument("folder", type=str, help="대상 폴더 경로")
     parser.add_argument("--recursive", action="store_true", help="하위 폴더까지 재귀적으로 처리")
