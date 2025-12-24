@@ -28,8 +28,6 @@ def transcode_to_temp(input_mp4: Path) -> Path:
         "-c:v", "libx264",
         "-profile:v", "high",
         "-pix_fmt", "yuv420p",
-        "-r", "2",
-
         "-b:v", "2420k",
         "-maxrate", "2420k",
         "-bufsize", "4840k",
